@@ -37,7 +37,7 @@ def detect_hardware():
 
     for i in range(info["gpu_count"]):
         props = torch.cuda.get_device_properties(i)
-        vram_gb = round(props.total_mem / (1024 ** 3), 1)
+        vram_gb = round(props.total_memory / (1024 ** 3), 1)
         info["gpus"].append({
             "index": i,
             "name": props.name,
@@ -53,41 +53,27 @@ def detect_hardware():
 def compute_training_params(hw):
     """Compute optimal training hyperparameters from detected hardware."""
 
-    # ------ n_proc: parallel environment workers ------
-    # Reserve 2 cores for the learner / OS. Use remaining physical cores.
-    reserved_cores = 2
-    n_proc = max(2, hw["physical_cores"] - reserved_cores)
+    # На Kaggle 4 vCPU. Лучше использовать их все для симуляции, 
+    # так как rlgym_sim сильно упирается в процессор.
+    n_proc = hw["logical_cores"] if hw["logical_cores"] > 0 else 4
 
-    # ------ Batch sizing based on VRAM ------
-    # Heuristic: ~25k timesteps per GB of VRAM works well for the
-    # Attention architecture with 256-wide layers.
-    # Minimum 25_600, maximum capped at 1_024_000.
-    if hw["total_vram_gb"] > 0:
-        primary_vram = hw["gpus"][0]["vram_gb"]
-    else:
-        # CPU-only fallback
-        primary_vram = 2.0  # conservative
-
-    raw_batch = int(primary_vram * 25_600)
-
-    # Round DOWN to nearest multiple of 4096 for clean minibatch division
-    ppo_batch_size = max(25_600, (raw_batch // 4096) * 4096)
-    ppo_batch_size = min(ppo_batch_size, 1_024_000)
-
-    # Minibatch: scale with VRAM. ~4096 per 4 GB, cap at 16384.
-    ppo_minibatch_size = max(2048, min(16384, int(primary_vram / 4) * 4096))
-    # Ensure minibatch divides batch evenly
-    ppo_minibatch_size = _nearest_divisor(ppo_batch_size, ppo_minibatch_size)
+    # Отключаем жадное масштабирование по VRAM! 
+    # Для 4 ядер на Kaggle собирать 370k шагов - это слишком долго.
+    # Ставим фиксированные, разумные значения.
+    ppo_batch_size = 32768  # В 11 раз меньше, чем было!
+    
+    # Минибатч тоже делаем адекватным (должен быть делителем ppo_batch_size)
+    ppo_minibatch_size = 8192 
 
     ts_per_iteration = ppo_batch_size
     exp_buffer_size = ppo_batch_size
 
     return {
-        "n_proc": n_proc,
-        "ppo_batch_size": ppo_batch_size,
-        "ppo_minibatch_size": ppo_minibatch_size,
-        "ts_per_iteration": ts_per_iteration,
-        "exp_buffer_size": exp_buffer_size,
+        "n_proc": int(n_proc),
+        "ppo_batch_size": int(ppo_batch_size),
+        "ppo_minibatch_size": int(ppo_minibatch_size),
+        "ts_per_iteration": int(ts_per_iteration),
+        "exp_buffer_size": int(exp_buffer_size),
     }
 
 

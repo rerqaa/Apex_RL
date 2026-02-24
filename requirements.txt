@@ -1,0 +1,6 @@
+torch
+numpy
+psutil
+rlgym-sim
+rlgym-ppo
+wandb
