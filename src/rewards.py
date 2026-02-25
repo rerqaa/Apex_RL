@@ -6,7 +6,8 @@ class Phase1Reward(RewardFunction):
     def __init__(self):
         super().__init__()
         # Event weights
-        self.touch_weight = 1.0 # Reduced from 5.0 to prevent wall-pinning exploits
+        self.touch_weight = 3.0 # Increased to incentivize contact while learning to hit hard
+        self.touch_vel_weight = 5.0 # High reward for hitting the ball FAST toward the goal
         
         # Differential potential weights (scaled up as they represent tiny frame-to-frame deltas)
         self.vel_ball_to_goal_weight = 2.0
@@ -34,9 +35,21 @@ class Phase1Reward(RewardFunction):
         car_id = player.car_id
         target_goal = self.orange_goal if player.team_num == 0 else self.blue_goal
 
-        # 1. Touch ball (Event)
+        # 1. Touch ball (Event & Velocity-based)
         if player.ball_touched:
             reward += self.touch_weight
+            
+            # Reward proportional to ball's velocity vector toward the goal
+            vec_to_goal = target_goal - state.ball.position
+            dist_to_goal = np.linalg.norm(vec_to_goal)
+            if dist_to_goal > 0:
+                dir_to_goal = vec_to_goal / dist_to_goal
+                # Project ball velocity onto the goal direction
+                vel_toward_goal = np.dot(state.ball.linear_velocity, dir_to_goal)
+                
+                # Only reward positive velocity toward goal; normalize by max speed
+                if vel_toward_goal > 0:
+                    reward += self.touch_vel_weight * (vel_toward_goal / self.MAX_VEL)
 
         # 2. Car to Ball Potential (Differential)
         # Encourages closing the distance to the ball.

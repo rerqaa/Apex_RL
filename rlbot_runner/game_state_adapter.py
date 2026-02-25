@@ -1,17 +1,17 @@
 """
-Converts RLBot GameTickPacket data into the 185-dim observation
+Converts RLBot GameTickPacket data into the 225-dim observation
 format expected by the trained Apex-RL model.
 
 Observation layout (must match obs.py exactly):
-  6 × (20 features + 1 mask) = 126  [player entities]
-  + 9   ball
+  6 × (20 physics + 4 one-hot + 1 mask) = 150  [player entities]
+  + 1 × (9 physics + 11 padding + 4 one-hot + 1 mask) = 25 [ball entity]
   + 34  boost pads
   + 8   previous action
   + 3   relative ball position
   + 3   relative ball velocity
   + 1   score differential
   + 1   ball touched
-  = 185 total
+  = 225 total
 """
 
 import numpy as np
@@ -21,6 +21,13 @@ import math
 MAX_ALLIES = 2
 MAX_ENEMIES = 3
 PLAYER_FEAT_SIZE = 20
+ENTITY_TYPE_SIZE = 4
+ENTITY_FEAT_SIZE = PLAYER_FEAT_SIZE + ENTITY_TYPE_SIZE
+
+ONEHOT_SELF   = [1.0, 0.0, 0.0, 0.0]
+ONEHOT_ALLY   = [0.0, 1.0, 0.0, 0.0]
+ONEHOT_ENEMY  = [0.0, 0.0, 1.0, 0.0]
+ONEHOT_BALL   = [0.0, 0.0, 0.0, 1.0]
 
 # Normalization constants (must match obs.py)
 POS_STD = 2300.0
@@ -69,36 +76,27 @@ BOOST_LOCATIONS = (
 
 def _euler_to_forward_up(pitch, yaw, roll):
     """Convert pitch/yaw/roll (radians) to forward and up unit vectors.
-    Uses quaternion path identical to rlgym_sim's quat_to_rot_mtx to ensure
-    exact numerical equivalence with the training environment."""
-    cp2 = math.cos(pitch / 2); sp2 = math.sin(pitch / 2)
-    cy2 = math.cos(yaw / 2);   sy2 = math.sin(yaw / 2)
-    cr2 = math.cos(roll / 2);  sr2 = math.sin(roll / 2)
+    Uses exact standard mathematical conversion matching Rocket League."""
+    cp = math.cos(pitch)
+    sp = math.sin(pitch)
+    cy = math.cos(yaw)
+    sy = math.sin(yaw)
+    cr = math.cos(roll)
+    sr = math.sin(roll)
 
-    # Quaternion from Euler (Unreal Engine convention)
-    qw = cr2 * cp2 * cy2 + sr2 * sp2 * sy2
-    qx = sr2 * cp2 * cy2 - cr2 * sp2 * sy2
-    qy = cr2 * sp2 * cy2 + sr2 * cp2 * sy2
-    qz = cr2 * cp2 * sy2 - sr2 * sp2 * cy2
-
-    # rlgym_sim negates all quaternion components before building the matrix
-    w = -qw; x = -qx; y = -qy; z = -qz
-    norm = qw * qw + qx * qx + qy * qy + qz * qz
-    s = 1.0 / norm if norm != 0 else 0.0
-
-    # Forward vector (column 0 of rotation matrix)
+    # Forward vector
     forward = np.array([
-        1.0 - 2.0 * s * (y * y + z * z),
-        2.0 * s * (x * y + z * w),
-        2.0 * s * (x * z - y * w),
-    ])
+        cp * cy,
+        cp * sy,
+        sp
+    ], dtype=np.float32)
 
-    # Up vector (column 2 of rotation matrix)
+    # Up vector
     up = np.array([
-        2.0 * s * (x * z + y * w),
-        2.0 * s * (y * z - x * w),
-        1.0 - 2.0 * s * (x * x + y * y),
-    ])
+        -cr * cy * sp - sr * sy,
+        -cr * sy * sp + sr * cy,
+        cr * cp
+    ], dtype=np.float32)
 
     return forward, up
 
@@ -126,32 +124,40 @@ class GameStateAdapter:
                     self._boost_index_map[rlbot_idx] = sim_idx
                     break
 
-    def _normalize_car(self, car_info):
+    def _normalize_car(self, car_info, invert):
         """Extract 20 features from an RLBot PlayerInfo struct."""
         phys = car_info.physics
         obs = []
 
+        inv = -1.0 if invert else 1.0
+
         # Position (3)
-        obs.extend([phys.location.x / POS_STD,
-                     phys.location.y / POS_STD,
+        obs.extend([phys.location.x * inv / POS_STD,
+                     phys.location.y * inv / POS_STD,
                      phys.location.z / POS_STD])
 
         # Linear velocity (3)
-        obs.extend([phys.velocity.x / VEL_STD,
-                     phys.velocity.y / VEL_STD,
+        obs.extend([phys.velocity.x * inv / VEL_STD,
+                     phys.velocity.y * inv / VEL_STD,
                      phys.velocity.z / VEL_STD])
 
         # Angular velocity (3)
-        obs.extend([phys.angular_velocity.x / ANG_STD,
-                     phys.angular_velocity.y / ANG_STD,
+        obs.extend([phys.angular_velocity.x * inv / ANG_STD,
+                     phys.angular_velocity.y * inv / ANG_STD,
                      phys.angular_velocity.z / ANG_STD])
 
+        # Pitch, Yaw, Roll adjust for inversion
+        pitch = phys.rotation.pitch
+        yaw = phys.rotation.yaw
+        roll = phys.rotation.roll
+        
+        if invert:
+            pitch *= -1
+            yaw = yaw + math.pi if yaw <= 0 else yaw - math.pi
+            roll *= -1
+
         # Forward and Up vectors from Euler angles (6)
-        forward, up = _euler_to_forward_up(
-            phys.rotation.pitch,
-            phys.rotation.yaw,
-            phys.rotation.roll
-        )
+        forward, up = _euler_to_forward_up(pitch, yaw, roll)
         obs.extend(forward.tolist())
         obs.extend(up.tolist())
 
@@ -179,58 +185,50 @@ class GameStateAdapter:
         """
         obs = []
         my_car = packet.game_cars[bot_index]
+        invert = (bot_team == 1)
+        inv = -1.0 if invert else 1.0
 
-        # 1. Self (20 + 1 mask = 21)
-        self_data = self._normalize_car(my_car)
-        obs.extend(self_data + [1.0])
+        # 1. Self (20 physics + 4 one-hot + 1 mask = 25)
+        self_data = self._normalize_car(my_car, invert)
+        obs.extend(self_data + ONEHOT_SELF + [1.0])
 
         # 2. Allies (zero-padded to MAX_ALLIES=2)
-        allies = []
-        for i in range(packet.num_cars):
-            if i == bot_index:
-                continue
-            car = packet.game_cars[i]
-            if car.team == bot_team:
-                allies.append(car)
-
+        # Phase 1 Model (1v0) has no allies. Force padding.
         for i in range(MAX_ALLIES):
-            if i < len(allies):
-                obs.extend(self._normalize_car(allies[i]) + [1.0])
-            else:
-                obs.extend([0.0] * PLAYER_FEAT_SIZE + [0.0])
+            obs.extend([0.0] * ENTITY_FEAT_SIZE + [0.0])
 
         # 3. Enemies (zero-padded to MAX_ENEMIES=3)
-        enemies = []
-        for i in range(packet.num_cars):
-            car = packet.game_cars[i]
-            if car.team != bot_team:
-                enemies.append(car)
-
+        # Phase 1 Model (1v0) has no enemies. Force padding.
         for i in range(MAX_ENEMIES):
-            if i < len(enemies):
-                obs.extend(self._normalize_car(enemies[i]) + [1.0])
-            else:
-                obs.extend([0.0] * PLAYER_FEAT_SIZE + [0.0])
+            obs.extend([0.0] * ENTITY_FEAT_SIZE + [0.0])
 
-        # 4. Ball (9)
+        # 4. Ball Data (9 physics + 11 zero-padding + 4 one-hot + 1 mask = 25)
         ball = packet.game_ball.physics
-        obs.extend([
-            ball.location.x / POS_STD,
-            ball.location.y / POS_STD,
+        ball_physics = [
+            ball.location.x * inv / POS_STD,
+            ball.location.y * inv / POS_STD,
             ball.location.z / POS_STD,
-            ball.velocity.x / VEL_STD,
-            ball.velocity.y / VEL_STD,
+            ball.velocity.x * inv / VEL_STD,
+            ball.velocity.y * inv / VEL_STD,
             ball.velocity.z / VEL_STD,
-            ball.angular_velocity.x / ANG_STD,
-            ball.angular_velocity.y / ANG_STD,
+            ball.angular_velocity.x * inv / ANG_STD,
+            ball.angular_velocity.y * inv / ANG_STD,
             ball.angular_velocity.z / ANG_STD,
-        ])
+        ]
+        ball_padding = [0.0] * 11
+        obs.extend(ball_physics + ball_padding + ONEHOT_BALL + [1.0])
 
         # 5. Boost pads (34)
         boost_states = [0.0] * 34
         if self._boost_index_map is not None:
             for rlbot_idx, sim_idx in self._boost_index_map.items():
                 boost_states[sim_idx] = float(packet.game_boosts[rlbot_idx].is_active)
+        
+        # If inverted, we must reverse the boost pad layout. 
+        # rlgym_sim does this automatically for team 1.
+        if invert:
+            boost_states.reverse()
+            
         obs.extend(boost_states)
 
         # 6. Previous action (8)
@@ -239,15 +237,15 @@ class GameStateAdapter:
         # 7. Relative ball position (3)
         my_phys = my_car.physics
         obs.extend([
-            (ball.location.x - my_phys.location.x) / POS_STD,
-            (ball.location.y - my_phys.location.y) / POS_STD,
+            (ball.location.x - my_phys.location.x) * inv / POS_STD,
+            (ball.location.y - my_phys.location.y) * inv / POS_STD,
             (ball.location.z - my_phys.location.z) / POS_STD,
         ])
 
         # 8. Relative ball velocity (3)
         obs.extend([
-            (ball.velocity.x - my_phys.velocity.x) / VEL_STD,
-            (ball.velocity.y - my_phys.velocity.y) / VEL_STD,
+            (ball.velocity.x - my_phys.velocity.x) * inv / VEL_STD,
+            (ball.velocity.y - my_phys.velocity.y) * inv / VEL_STD,
             (ball.velocity.z - my_phys.velocity.z) / VEL_STD,
         ])
 

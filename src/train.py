@@ -138,7 +138,7 @@ def build_env():
         tick_skip=8,
         team_size=1,
         spawn_opponents=False,  # Phase 1: 1v0
-        terminal_conditions=[TimeoutCondition(400), GoalScoredCondition()],
+        terminal_conditions=[TimeoutCondition(800), GoalScoredCondition()],
         reward_fn=reward_fn,
         obs_builder=ZeroPaddedObs(),
         action_parser=ContinuousAction()
