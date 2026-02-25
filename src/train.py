@@ -53,20 +53,14 @@ def detect_hardware():
 def compute_training_params(hw):
     """Compute optimal training hyperparameters from detected hardware."""
 
-    # На Kaggle 4 vCPU. Лучше использовать их все для симуляции, 
-    # так как rlgym_sim сильно упирается в процессор.
     n_proc = hw["logical_cores"] if hw["logical_cores"] > 0 else 4
 
-    # Отключаем жадное масштабирование по VRAM! 
-    # Для 4 ядер на Kaggle собирать 370k шагов - это слишком долго.
-    # Ставим фиксированные, разумные значения.
-    ppo_batch_size = 32768  # В 11 раз меньше, чем было!
-    
-    # Минибатч тоже делаем адекватным (должен быть делителем ppo_batch_size)
-    ppo_minibatch_size = 8192 
+    # Large batch for low-variance gradient estimates on 4 vCPUs.
+    ppo_batch_size = 100_000
+    ppo_minibatch_size = 10_000  # must divide batch_size evenly
 
-    ts_per_iteration = ppo_batch_size
-    exp_buffer_size = ppo_batch_size
+    ts_per_iteration = 100_000   # collect one full batch per iteration
+    exp_buffer_size = 100_000    # standard on-policy PPO buffer
 
     return {
         "n_proc": int(n_proc),
@@ -173,7 +167,8 @@ def train_phase_1():
         log_to_wandb=False,
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
-        ppo_ent_coef=0.005,
+        ppo_ent_coef=0.001,
+        learning_rate=1e-4,
         standardize_returns=True,
         standardize_obs=False,
     )

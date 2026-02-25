@@ -4,6 +4,15 @@ from torch.distributions import Normal
 import numpy as np
 import functools
 
+
+def init_weights(module, gain=np.sqrt(2)):
+    """Apply Orthogonal Initialization to Linear layers."""
+    if isinstance(module, nn.Linear):
+        nn.init.orthogonal_(module.weight, gain=gain)
+        if module.bias is not None:
+            nn.init.constant_(module.bias, 0.0)
+
+
 class MapContinuousToAction(nn.Module):
     def __init__(self, range_min=0.1, range_max=1):
         super().__init__()
@@ -15,14 +24,15 @@ class MapContinuousToAction(nn.Module):
         n = x.shape[-1] // 2
         return x[..., :n], x[..., n:] * self.m + self.b
 
+
 class AttentionApexPolicy(nn.Module):
     def __init__(self, input_shape, output_shape, layer_sizes, device, var_min=0.1, var_max=1.0):
         super().__init__()
         self.device = device
         self.affine_map = MapContinuousToAction(range_min=var_min, range_max=var_max)
         
-        # Must match obs.py: 20 features + 1 mask = 21
-        self.ENTITY_FEAT_SIZE = 21
+        # Must match obs.py: 24 features (20 physics + 4 one-hot) + 1 mask = 25
+        self.ENTITY_FEAT_SIZE = 25
         
         # Self (1) + Allies (2) + Enemies (3) = 6 players
         self.NUM_PLAYERS = 6
@@ -66,7 +76,43 @@ class AttentionApexPolicy(nn.Module):
         self.entity_encoder = self.entity_encoder.to(self.device)
         self.transformer = self.transformer.to(self.device)
 
+        # --- Orthogonal Initialization ---
+        # Entity encoder: all Linear layers with gain=sqrt(2)
+        for module in self.entity_encoder:
+            init_weights(module, gain=np.sqrt(2))
+        
+        # Head: all Linear layers except the final output layer with gain=sqrt(2)
+        head_linear_layers = [m for m in self.head if isinstance(m, nn.Linear)]
+        for layer in head_linear_layers[:-1]:
+            init_weights(layer, gain=np.sqrt(2))
+        
+        # Final layer of Policy: gain=0.01 (keeps Tanh input near 0 → centered actions)
+        init_weights(head_linear_layers[-1], gain=0.01)
+        
+        # Transformer: leave PyTorch defaults (do NOT manually init)
 
+
+    def _parse_obs(self, obs):
+        """Parse flat observation into entity features and global features.
+        
+        Since obs.py now outputs all entities (including ball) in uniform
+        25-feature format, we slice them identically.
+        """
+        # Total entities: 6 players + 1 ball = 7
+        total_entities = self.NUM_PLAYERS + 1  # 7
+        entity_end = total_entities * self.ENTITY_FEAT_SIZE  # 7 * 25 = 175
+        
+        entity_features = []
+        start_idx = 0
+        for _ in range(total_entities):
+            end_idx = start_idx + self.ENTITY_FEAT_SIZE
+            entity_features.append(obs[..., start_idx:end_idx])
+            start_idx = end_idx
+        
+        # Global features are everything remaining after entities
+        global_features = obs[..., entity_end:]
+        
+        return entity_features, global_features
 
     def get_output(self, obs):
         if type(obs) != torch.Tensor:
@@ -77,30 +123,10 @@ class AttentionApexPolicy(nn.Module):
         if len(obs.shape) == 1:
             obs = obs.unsqueeze(0)
 
-        player_features = []
-        start_idx = 0
-        
-        for _ in range(self.NUM_PLAYERS):
-            end_idx = start_idx + self.ENTITY_FEAT_SIZE
-            p_feat = obs[..., start_idx:end_idx]
-            player_features.append(p_feat)
-            start_idx = end_idx
-            
-        # Extract ball (9 features)
-        ball_feat_raw = obs[..., start_idx:start_idx+9]
-        start_idx += 9
-        
-        # Pad ball to 21 features (9 values + 11 zeros + 1 mask)
-        padding = torch.zeros((*ball_feat_raw.shape[:-1], 11), device=self.device)
-        mask_ones = torch.ones((*ball_feat_raw.shape[:-1], 1), device=self.device)
-        ball_feat = torch.cat([ball_feat_raw, padding, mask_ones], dim=-1)
-        player_features.append(ball_feat)
-        
-        # Global features are everything remaining
-        global_features = obs[..., start_idx:]
+        entity_features, global_features = self._parse_obs(obs)
 
-        # Stack entities: [Batch, 7, 21]
-        entities = torch.stack(player_features, dim=-2)
+        # Stack entities: [Batch, 7, 25]
+        entities = torch.stack(entity_features, dim=-2)
         is_present = entities[..., -1:]
         
         # Encode -> [Batch, 7, 128]
@@ -170,8 +196,8 @@ class AttentionApexValueEstimator(nn.Module):
         super().__init__()
         self.device = device
         
-        # Must match obs.py: 20 features + 1 mask = 21
-        self.ENTITY_FEAT_SIZE = 21
+        # Must match obs.py: 24 features (20 physics + 4 one-hot) + 1 mask = 25
+        self.ENTITY_FEAT_SIZE = 25
         
         # Self (1) + Allies (2) + Enemies (3) = 6 players
         self.NUM_PLAYERS = 6
@@ -195,7 +221,7 @@ class AttentionApexValueEstimator(nn.Module):
         # Global features: BoostPads(34) + Action(8) + RelBallPos(3) + RelBallVel(3) + ScoreDiff(1) + BallTouched(1) = 50
         self.global_feat_size = 50
         
-        # Centralized Critic: Can see everything, but for now mirrors policy input architecture
+        # Centralized Critic: mirrors policy input architecture
         self.combined_size = self.D_MODEL + self.global_feat_size
 
         assert len(layer_sizes) > 0, "AT LEAST ONE LAYER MUST BE SPECIFIED"
@@ -213,6 +239,37 @@ class AttentionApexValueEstimator(nn.Module):
         self.entity_encoder = self.entity_encoder.to(self.device)
         self.transformer = self.transformer.to(self.device)
 
+        # --- Orthogonal Initialization ---
+        # Entity encoder: all Linear layers with gain=sqrt(2)
+        for module in self.entity_encoder:
+            init_weights(module, gain=np.sqrt(2))
+        
+        # Head: all Linear layers except the final output layer with gain=sqrt(2)
+        head_linear_layers = [m for m in self.head if isinstance(m, nn.Linear)]
+        for layer in head_linear_layers[:-1]:
+            init_weights(layer, gain=np.sqrt(2))
+        
+        # Final layer of Critic: gain=1.0
+        init_weights(head_linear_layers[-1], gain=1.0)
+        
+        # Transformer: leave PyTorch defaults (do NOT manually init)
+
+    def _parse_obs(self, x):
+        """Parse flat observation into entity features and global features."""
+        total_entities = self.NUM_PLAYERS + 1  # 7
+        entity_end = total_entities * self.ENTITY_FEAT_SIZE  # 7 * 25 = 175
+        
+        entity_features = []
+        start_idx = 0
+        for _ in range(total_entities):
+            end_idx = start_idx + self.ENTITY_FEAT_SIZE
+            entity_features.append(x[..., start_idx:end_idx])
+            start_idx = end_idx
+        
+        global_features = x[..., entity_end:]
+        
+        return entity_features, global_features
+
     def forward(self, x):
         t = type(x)
         if t != torch.Tensor:
@@ -223,29 +280,10 @@ class AttentionApexValueEstimator(nn.Module):
         if len(x.shape) == 1:
             x = x.unsqueeze(0)
 
-        player_features = []
-        start_idx = 0
-        
-        for _ in range(self.NUM_PLAYERS):
-            end_idx = start_idx + self.ENTITY_FEAT_SIZE
-            p_feat = x[..., start_idx:end_idx]
-            player_features.append(p_feat)
-            start_idx = end_idx
-            
-        # Extract ball
-        ball_feat_raw = x[..., start_idx:start_idx+9]
-        start_idx += 9
-        
-        # Pad ball to 21
-        padding = torch.zeros((*ball_feat_raw.shape[:-1], 11), device=self.device)
-        mask_ones = torch.ones((*ball_feat_raw.shape[:-1], 1), device=self.device)
-        ball_feat = torch.cat([ball_feat_raw, padding, mask_ones], dim=-1)
-        player_features.append(ball_feat)
-        
-        global_features = x[..., start_idx:]
+        entity_features, global_features = self._parse_obs(x)
 
-        # Stack entities: [Batch, 7, 21]
-        entities = torch.stack(player_features, dim=-2)
+        # Stack entities: [Batch, 7, 25]
+        entities = torch.stack(entity_features, dim=-2)
         is_present = entities[..., -1:]
         
         # Encode
