@@ -69,26 +69,35 @@ BOOST_LOCATIONS = (
 
 def _euler_to_forward_up(pitch, yaw, roll):
     """Convert pitch/yaw/roll (radians) to forward and up unit vectors.
-    Uses the same rotation matrix convention as rlgym_sim."""
-    cp = math.cos(pitch)
-    sp = math.sin(pitch)
-    cy = math.cos(yaw)
-    sy = math.sin(yaw)
-    cr = math.cos(roll)
-    sr = math.sin(roll)
+    Uses quaternion path identical to rlgym_sim's quat_to_rot_mtx to ensure
+    exact numerical equivalence with the training environment."""
+    cp2 = math.cos(pitch / 2); sp2 = math.sin(pitch / 2)
+    cy2 = math.cos(yaw / 2);   sy2 = math.sin(yaw / 2)
+    cr2 = math.cos(roll / 2);  sr2 = math.sin(roll / 2)
+
+    # Quaternion from Euler (Unreal Engine convention)
+    qw = cr2 * cp2 * cy2 + sr2 * sp2 * sy2
+    qx = sr2 * cp2 * cy2 - cr2 * sp2 * sy2
+    qy = cr2 * sp2 * cy2 + sr2 * cp2 * sy2
+    qz = cr2 * cp2 * sy2 - sr2 * sp2 * cy2
+
+    # rlgym_sim negates all quaternion components before building the matrix
+    w = -qw; x = -qx; y = -qy; z = -qz
+    norm = qw * qw + qx * qx + qy * qy + qz * qz
+    s = 1.0 / norm if norm != 0 else 0.0
 
     # Forward vector (column 0 of rotation matrix)
     forward = np.array([
-        cp * cy,
-        cp * sy,
-        sp
+        1.0 - 2.0 * s * (y * y + z * z),
+        2.0 * s * (x * y + z * w),
+        2.0 * s * (x * z - y * w),
     ])
 
     # Up vector (column 2 of rotation matrix)
     up = np.array([
-        -sr * cy * sp - cr * sy,
-        -sr * sy * sp + cr * cy,
-        sr * cp
+        2.0 * s * (x * z + y * w),
+        2.0 * s * (y * z - x * w),
+        1.0 - 2.0 * s * (x * x + y * y),
     ])
 
     return forward, up

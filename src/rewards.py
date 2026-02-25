@@ -50,9 +50,8 @@ class Phase1Reward(RewardFunction):
             # Max diff is roughly 2300 * 0.066 = 151.8 UU. We scale the diff down to keep rewards stable.
             norm_diff = dist_diff_car_ball / 100.0
             
-            # We only reward positive velocity towards the ball to prevent jitter exploits.
-            if norm_diff > 0:
-                reward += self.car_to_ball_pot_weight * norm_diff
+            # True differential potential: reward approaching, penalize driving away
+            reward += self.car_to_ball_pot_weight * norm_diff
                 
         self.last_car_to_ball_dist[car_id] = dist_to_ball
 

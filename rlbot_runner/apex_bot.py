@@ -28,11 +28,15 @@ from game_state_adapter import GameStateAdapter
 
 class ApexBot(BaseAgent):
 
+    TICK_SKIP = 8  # Must match train.py tick_skip
+
     def __init__(self, name, team, index):
         super().__init__(name, team, index)
         self.adapter = GameStateAdapter()
         self.model = None
         self.device = None
+        self.tick_count = 0
+        self.current_controls = SimpleControllerState()
 
     def initialize_agent(self):
         """Called once when the bot starts. Load model and build boost map."""
@@ -97,6 +101,13 @@ class ApexBot(BaseAgent):
         if self.model is None:
             return SimpleControllerState()
 
+        # Hold each action for TICK_SKIP frames to match training tick rate
+        self.tick_count += 1
+        if self.tick_count < self.TICK_SKIP:
+            return self.current_controls
+
+        self.tick_count = 0
+
         # Build observation
         obs = self.adapter.build_obs(packet, self.index, self.team)
 
@@ -121,4 +132,6 @@ class ApexBot(BaseAgent):
         controls.boost = action[6] > 0
         controls.handbrake = action[7] > 0
 
+        self.current_controls = controls
         return controls
+
