@@ -53,20 +53,27 @@ def detect_hardware():
 def compute_training_params(hw):
     """Compute optimal training hyperparameters from detected hardware."""
 
-    n_proc = 4
+    # На Kaggle 4 vCPU. Лучше использовать их все для симуляции, 
+    # так как rlgym_sim сильно упирается в процессор.
+    n_proc = hw["logical_cores"] if hw["logical_cores"] > 0 else 4
 
-    ppo_batch_size = 100000 
-    ppo_minibatch_size = 50000 
+    # Отключаем жадное масштабирование по VRAM! 
+    # Для 4 ядер на Kaggle собирать 370k шагов - это слишком долго.
+    # Ставим фиксированные, разумные значения.
+    ppo_batch_size = 32768  # В 11 раз меньше, чем было!
+    
+    # Минибатч тоже делаем адекватным (должен быть делителем ppo_batch_size)
+    ppo_minibatch_size = 8192 
 
-    ts_per_iteration = 100000
-    exp_buffer_size = 100000
+    ts_per_iteration = ppo_batch_size
+    exp_buffer_size = ppo_batch_size
 
     return {
-        "n_proc": n_proc,
-        "ppo_batch_size": ppo_batch_size,
-        "ppo_minibatch_size": ppo_minibatch_size,
-        "ts_per_iteration": ts_per_iteration,
-        "exp_buffer_size": exp_buffer_size,
+        "n_proc": int(n_proc),
+        "ppo_batch_size": int(ppo_batch_size),
+        "ppo_minibatch_size": int(ppo_minibatch_size),
+        "ts_per_iteration": int(ts_per_iteration),
+        "exp_buffer_size": int(exp_buffer_size),
     }
 
 
