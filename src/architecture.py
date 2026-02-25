@@ -66,18 +66,7 @@ class AttentionApexPolicy(nn.Module):
         self.entity_encoder = self.entity_encoder.to(self.device)
         self.transformer = self.transformer.to(self.device)
 
-    @functools.lru_cache()
-    def logpdf(self, x, mean, std):
-        msq = mean * mean
-        ssq = std * std
-        xsq = x * x
 
-        term1 = -torch.divide(msq, (2 * ssq))
-        term2 = torch.divide(mean * x, ssq)
-        term3 = -torch.divide(xsq, (2 * ssq))
-        term4 = torch.log(1 / torch.sqrt(2 * np.pi * ssq))
-
-        return term1 + term2 + term3 + term4
 
     def get_output(self, obs):
         if type(obs) != torch.Tensor:
@@ -119,14 +108,18 @@ class AttentionApexPolicy(nn.Module):
         
         # Transformer -> [Batch, 7, 128]
         batch_size = encoded_entities.shape[0]
+        padding_mask = (is_present.squeeze(-1) == 0.0)
+
         max_chunk = 32768
         if batch_size > max_chunk:
             chunks = []
             for i in range(0, batch_size, max_chunk):
-                chunks.append(self.transformer(encoded_entities[i:i+max_chunk]))
+                enc_chunk = encoded_entities[i:i+max_chunk]
+                mask_chunk = padding_mask[i:i+max_chunk]
+                chunks.append(self.transformer(enc_chunk, src_key_padding_mask=mask_chunk))
             attended_entities = torch.cat(chunks, dim=0)
         else:
-            attended_entities = self.transformer(encoded_entities)
+            attended_entities = self.transformer(encoded_entities, src_key_padding_mask=padding_mask)
         
         # Self is the first entity (index 0)
         self_entity = attended_entities[..., 0, :]
@@ -141,11 +134,11 @@ class AttentionApexPolicy(nn.Module):
     def get_action(self, obs, summed_probs=True, deterministic=False):
         mean, std = self.get_output(obs)
         if deterministic:
-            return mean, 0
+            return mean.cpu(), 0
 
         distribution = Normal(loc=mean, scale=std)
         action = distribution.sample().clamp(min=-1, max=1)
-        log_prob = self.logpdf(action, mean, std)
+        log_prob = distribution.log_prob(action)
 
         shape = log_prob.shape
         if summed_probs:
@@ -160,9 +153,9 @@ class AttentionApexPolicy(nn.Module):
         mean, std = self.get_output(obs)
         distribution = Normal(loc=mean, scale=std)
 
-        prob = self.logpdf(acts, mean, std)
+        prob = distribution.log_prob(acts)
         if summed_probs:
-            log_probs = prob.sum(dim=1).to(self.device)
+            log_probs = prob.sum(dim=-1).to(self.device)
         else:
             log_probs = prob.to(self.device)
 
@@ -260,14 +253,18 @@ class AttentionApexValueEstimator(nn.Module):
         
         # Transformer
         batch_size = encoded_entities.shape[0]
+        padding_mask = (is_present.squeeze(-1) == 0.0)
+
         max_chunk = 32768
         if batch_size > max_chunk:
             chunks = []
             for i in range(0, batch_size, max_chunk):
-                chunks.append(self.transformer(encoded_entities[i:i+max_chunk]))
+                enc_chunk = encoded_entities[i:i+max_chunk]
+                mask_chunk = padding_mask[i:i+max_chunk]
+                chunks.append(self.transformer(enc_chunk, src_key_padding_mask=mask_chunk))
             attended_entities = torch.cat(chunks, dim=0)
         else:
-            attended_entities = self.transformer(encoded_entities)
+            attended_entities = self.transformer(encoded_entities, src_key_padding_mask=padding_mask)
         
         # Extract Self
         self_entity = attended_entities[..., 0, :]

@@ -43,7 +43,7 @@ class ZeroPaddedObs(ObsBuilder):
     def build_obs(self, player: PlayerData, state: GameState, previous_action: np.ndarray) -> np.ndarray:
         obs = []
 
-        # 1. Self Data (21 features + 1 mask = 22)
+        # 1. Self Data (20 features + 1 mask = 21)
         self_data = self._normalize_player(player)
         obs.extend(self_data + [1.0])  # Self is always present
 

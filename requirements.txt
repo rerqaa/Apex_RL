@@ -1,5 +1,6 @@
 torch
 numpy
 psutil
+RocketSim
 git+https://github.com/AechPro/rocket-league-gym-sim@main
 git+https://github.com/AechPro/rlgym-ppo@main

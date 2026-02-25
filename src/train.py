@@ -173,9 +173,9 @@ def train_phase_1():
         log_to_wandb=False,
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
-        ppo_ent_coef=0.01,
+        ppo_ent_coef=0.005,
         standardize_returns=True,
-        standardize_obs=True,
+        standardize_obs=False,
     )
 
     learner.learn()

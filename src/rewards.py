@@ -5,57 +5,76 @@ from rlgym_sim.utils.gamestates import GameState, PlayerData
 class Phase1Reward(RewardFunction):
     def __init__(self):
         super().__init__()
-        self.touch_weight = 5.0
-        self.vel_ball_to_goal_weight = 3.0
-        self.ball_to_goal_proximity_weight = 1.0
-        self.close_to_ball_weight = 0.5
-        self.face_ball_weight = 0.3
-        self.vel_toward_ball_weight = 0.5
+        # Event weights
+        self.touch_weight = 1.0 # Reduced from 5.0 to prevent wall-pinning exploits
+        
+        # Differential potential weights (scaled up as they represent tiny frame-to-frame deltas)
+        self.vel_ball_to_goal_weight = 2.0
+        self.ball_to_goal_pot_weight = 3.0
+        self.car_to_ball_pot_weight = 1.0
+        
+        # Goal positions
+        self.blue_goal = np.array([0, -5120.0, 0])
+        self.orange_goal = np.array([0, 5120.0, 0])
+        
+        # Velocity normalization constant
+        self.MAX_VEL = 2300.0
+        
+        # State tracking for differentials
+        self.last_ball_to_goal_dist = {}
+        self.last_car_to_ball_dist = {}
 
     def reset(self, initial_state: GameState):
-        pass
+        self.last_ball_to_goal_dist.clear()
+        self.last_car_to_ball_dist.clear()
 
     def get_reward(self, player: PlayerData, state: GameState, previous_action: np.ndarray) -> float:
         reward = 0.0
+        
+        car_id = player.car_id
+        target_goal = self.orange_goal if player.team_num == 0 else self.blue_goal
 
-        # 1. Touch ball
+        # 1. Touch ball (Event)
         if player.ball_touched:
             reward += self.touch_weight
 
-        # 2. Ball velocity toward opponent goal
-        goal_y = 5120.0 if player.team_num == 0 else -5120.0
-        goal_pos = np.array([0, goal_y, 0])
-        vec_to_goal = goal_pos - state.ball.position
-        dist_to_goal = np.linalg.norm(vec_to_goal)
-        if dist_to_goal > 0:
-            norm_to_goal = vec_to_goal / dist_to_goal
-            vel_to_goal = np.dot(state.ball.linear_velocity, norm_to_goal) / 2300.0
+        # 2. Car to Ball Potential (Differential)
+        # Encourages closing the distance to the ball.
+        # Stopping near the ball yields 0 reward (current dist == last dist).
+        dist_to_ball = np.linalg.norm(state.ball.position - player.car_data.position)
+        
+        if car_id in self.last_car_to_ball_dist:
+            dist_diff_car_ball = self.last_car_to_ball_dist[car_id] - dist_to_ball
+            # Normalize by max possible change per tick (approx MAX_VEL * tick_time)
+            # Assuming ~120Hz physics and tick_skip=8, dt is roughly 0.066s.
+            # Max diff is roughly 2300 * 0.066 = 151.8 UU. We scale the diff down to keep rewards stable.
+            norm_diff = dist_diff_car_ball / 100.0
+            
+            # We only reward positive velocity towards the ball to prevent jitter exploits.
+            if norm_diff > 0:
+                reward += self.car_to_ball_pot_weight * norm_diff
+                
+        self.last_car_to_ball_dist[car_id] = dist_to_ball
+
+        # 3. Ball to Goal Potential (Differential)
+        # Encourages moving the ball closer to the opponent's goal.
+        dist_ball_to_goal = np.linalg.norm(target_goal - state.ball.position)
+        
+        if car_id in self.last_ball_to_goal_dist:
+            dist_diff_ball_goal = self.last_ball_to_goal_dist[car_id] - dist_ball_to_goal
+            # Normalize diff
+            norm_diff_ball_goal = dist_diff_ball_goal / 100.0
+            reward += self.ball_to_goal_pot_weight * norm_diff_ball_goal
+            
+        self.last_ball_to_goal_dist[car_id] = dist_ball_to_goal
+
+        # 4. Ball Velocity toward Opponent Goal (Continuous Vector Projection)
+        # We keep this as an instantaneous measure, as it directly mirrors physical momentum transfer.
+        vec_to_goal = target_goal - state.ball.position
+        if dist_ball_to_goal > 0:
+            norm_to_goal = vec_to_goal / dist_ball_to_goal
+            vel_to_goal = np.dot(state.ball.linear_velocity, norm_to_goal) / self.MAX_VEL
             reward += self.vel_ball_to_goal_weight * vel_to_goal
-
-        # 3. Ball proximity to opponent goal (linear potential)
-        if player.team_num == 0:
-            ball_progress = state.ball.position[1] / 5120.0
-        else:
-            ball_progress = -state.ball.position[1] / 5120.0
-        reward += self.ball_to_goal_proximity_weight * ball_progress
-
-        # 4. Proximity to ball (exponential decay)
-        vec_to_ball = state.ball.position - player.car_data.position
-        dist_to_ball = np.linalg.norm(vec_to_ball)
-        reward += self.close_to_ball_weight * np.exp(-dist_to_ball / 1500.0)
-
-        # 5. Face ball
-        car_forward = player.car_data.forward()
-        if dist_to_ball > 0:
-            norm_to_ball = vec_to_ball / dist_to_ball
-            face_dot = np.dot(car_forward, norm_to_ball)
-            reward += self.face_ball_weight * face_dot
-
-        # 6. Velocity toward ball
-        car_vel = player.car_data.linear_velocity
-        if dist_to_ball > 0:
-            vel_toward_ball = np.dot(car_vel, vec_to_ball / dist_to_ball) / 2300.0
-            reward += self.vel_toward_ball_weight * max(vel_toward_ball, 0.0)
 
         return reward
 
