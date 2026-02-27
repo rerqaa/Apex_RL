@@ -138,7 +138,7 @@ def build_env():
         tick_skip=8,
         team_size=1,
         spawn_opponents=False,  # Phase 1: 1v0
-        terminal_conditions=[TimeoutCondition(800), GoalScoredCondition()],
+        terminal_conditions=[TimeoutCondition(300), GoalScoredCondition()],
         reward_fn=reward_fn,
         obs_builder=ZeroPaddedObs(),
         action_parser=ContinuousAction()
@@ -167,9 +167,9 @@ def train_phase_1():
         log_to_wandb=False,
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
-        ppo_ent_coef=0.001,
-        policy_lr=1e-4,
-        critic_lr=1e-4,
+        ppo_ent_coef=0.005,
+        policy_lr=3e-5,
+        critic_lr=3e-5,
         standardize_returns=True,
         standardize_obs=False,
     )

@@ -146,18 +146,18 @@ class GameStateAdapter:
                      phys.angular_velocity.y * inv / ANG_STD,
                      phys.angular_velocity.z / ANG_STD])
 
-        # Pitch, Yaw, Roll adjust for inversion
+        # Pitch, Yaw, Roll — convert to rlgym_sim's internal Euler convention.
+        # rlgym_sim's quat_to_euler returns [-pitch, yaw, -roll], so we must
+        # negate pitch and roll to match what the model saw during training.
         pitch = phys.rotation.pitch
         yaw = phys.rotation.yaw
         roll = phys.rotation.roll
         
         if invert:
-            pitch *= -1
             yaw = yaw + math.pi if yaw <= 0 else yaw - math.pi
-            roll *= -1
 
         # Forward and Up vectors from Euler angles (6)
-        forward, up = _euler_to_forward_up(pitch, yaw, roll)
+        forward, up = _euler_to_forward_up(-pitch, yaw, -roll)
         obs.extend(forward.tolist())
         obs.extend(up.tolist())
 
