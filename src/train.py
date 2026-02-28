@@ -127,10 +127,10 @@ def build_env():
     )
     from rlgym_sim.utils.action_parsers import ContinuousAction
     from obs import ZeroPaddedObs
-    from rewards import Phase1Reward
+    from rewards import build_phase_1_reward
 
     reward_fn = CombinedReward.from_zipped(
-        (Phase1Reward(), 1.0),
+        (build_phase_1_reward(), 1.0),
         (EventReward(goal=100.0, concede=-100.0), 1.0)
     )
 
@@ -167,7 +167,7 @@ def train_phase_1():
         log_to_wandb=False,
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
-        ppo_ent_coef=0.005,
+        ppo_ent_coef=0.01,
         policy_lr=3e-5,
         critic_lr=3e-5,
         standardize_returns=True,

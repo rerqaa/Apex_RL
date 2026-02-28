@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 import numpy as np
-import functools
 
 
 def init_weights(module, gain=np.sqrt(2)):
@@ -13,23 +12,12 @@ def init_weights(module, gain=np.sqrt(2)):
             nn.init.constant_(module.bias, 0.0)
 
 
-class MapContinuousToAction(nn.Module):
-    def __init__(self, range_min=0.1, range_max=1):
-        super().__init__()
-        tanh_range = [-1, 1]
-        self.m = (range_max - range_min) / (tanh_range[1] - tanh_range[0])
-        self.b = range_min - tanh_range[0] * self.m
-
-    def forward(self, x):
-        n = x.shape[-1] // 2
-        return x[..., :n], x[..., n:] * self.m + self.b
-
-
 class AttentionApexPolicy(nn.Module):
     def __init__(self, input_shape, output_shape, layer_sizes, device, var_min=0.1, var_max=1.0):
         super().__init__()
         self.device = device
-        self.affine_map = MapContinuousToAction(range_min=var_min, range_max=var_max)
+        # Standard deviation is learned independently
+        self.log_std = nn.Parameter(torch.zeros(output_shape // 2).to(self.device))
         
         # Must match obs.py: 24 features (20 physics + 4 one-hot) + 1 mask = 25
         self.ENTITY_FEAT_SIZE = 25
@@ -69,7 +57,7 @@ class AttentionApexPolicy(nn.Module):
             layers.append(nn.ReLU())
             prev_size = size
 
-        layers.append(nn.Linear(layer_sizes[-1], output_shape))
+        layers.append(nn.Linear(layer_sizes[-1], output_shape // 2))
         layers.append(nn.Tanh()) # ContinuousPolicy ends in Tanh
         
         self.head = nn.Sequential(*layers).to(self.device)
@@ -154,8 +142,9 @@ class AttentionApexPolicy(nn.Module):
         combined_obs = torch.cat([self_entity, global_features], dim=-1)
         
         # Pass through head
-        policy_output = self.head(combined_obs)
-        return self.affine_map(policy_output)
+        mean = self.head(combined_obs)
+        std = self.log_std.clamp(-20, 2).exp().expand_as(mean)
+        return mean, std
 
     def get_action(self, obs, summed_probs=True, deterministic=False):
         mean, std = self.get_output(obs)
