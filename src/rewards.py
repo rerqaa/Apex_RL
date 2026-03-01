@@ -23,7 +23,7 @@ def build_phase_1_reward():
     # High weight on touching the ball and objective scoring
     # Lower weight on continuous velocity rewards to prevent magnitude imbalance
     reward_fn = CombinedReward.from_zipped(
-        (to_ball, 0.1),
+        (to_ball, 0.5),
         (touch, 1.0),
         (to_goal, 1.0)
     )
