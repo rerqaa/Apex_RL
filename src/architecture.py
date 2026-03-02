@@ -17,7 +17,7 @@ class AttentionApexPolicy(nn.Module):
         super().__init__()
         self.device = device
         # Standard deviation is learned independently
-        self.log_std = nn.Parameter(torch.zeros(output_shape // 2).to(self.device))
+        self.log_std = nn.Parameter(torch.full((output_shape // 2,), -0.5).to(self.device))
         
         # Must match obs.py: 24 features (20 physics + 4 one-hot) + 1 mask = 25
         self.ENTITY_FEAT_SIZE = 25
@@ -143,7 +143,7 @@ class AttentionApexPolicy(nn.Module):
         
         # Pass through head
         mean = self.head(combined_obs)
-        std = self.log_std.clamp(-20, 2).exp().expand_as(mean)
+        std = self.log_std.clamp(-20, 0.5).exp().expand_as(mean)
         return mean, std
 
     def get_action(self, obs, summed_probs=True, deterministic=False):
