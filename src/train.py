@@ -168,8 +168,8 @@ def train_phase_1():
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
         ppo_ent_coef=0.005,
-        policy_lr=3e-5,
-        critic_lr=3e-5,
+        policy_lr=2e-5,
+        critic_lr=2e-5,
         standardize_returns=True,
         standardize_obs=False,
     )
