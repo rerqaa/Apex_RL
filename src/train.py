@@ -181,9 +181,8 @@ def train_phase_1():
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
         ppo_ent_coef=0.005,
-        # Linearly decay LR from 2e-5 to 1e-6 over the next 50 million steps
-        policy_lr=LinearSchedule(2e-5, 1e-6, 50_000_000),
-        critic_lr=LinearSchedule(2e-5, 1e-6, 50_000_000),
+        policy_lr=1e-5,
+        critic_lr=1e-5,
         standardize_returns=True,
         standardize_obs=False,
     )
