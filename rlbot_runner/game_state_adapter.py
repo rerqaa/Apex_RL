@@ -102,7 +102,6 @@ def _euler_to_forward_up(pitch, yaw, roll):
 
 
 class GameStateAdapter:
-    """Translates RLBot GameTickPacket → 185-dim observation array."""
 
     def __init__(self):
         self.previous_action = np.zeros(8, dtype=np.float32)
@@ -256,8 +255,14 @@ class GameStateAdapter:
             score_diff = (packet.teams[1].score - packet.teams[0].score) / 10.0
         obs.append(score_diff)
 
-        # 10. Ball touched (1)
-        obs.append(float(packet.game_ball.latest_touch.player_index == bot_index))
+        # 10. Ball touched (1) — approximate rlgym_sim's contact-state flag:
+        #     True while ball is in contact (touch within current tick window)
+        touch = packet.game_ball.latest_touch
+        game_time = packet.game_info.seconds_elapsed
+        tick_interval = 8 / 120.0  # tick_skip / game_fps
+        touched = (touch.player_index == bot_index and
+                   (game_time - touch.time_seconds) < tick_interval)
+        obs.append(float(touched))
 
         return np.asarray(obs, dtype=np.float32)
 

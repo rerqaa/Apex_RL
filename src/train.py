@@ -11,6 +11,19 @@ rlgym_ppo.ppo.ppo_learner.ContinuousPolicy = AttentionApexPolicy
 rlgym_ppo.ppo.ppo_learner.ValueEstimator = AttentionApexValueEstimator
 
 
+class LinearSchedule:
+    """Linearly decays learning rate from `initial_lr` to `final_lr` over `total_steps`."""
+    def __init__(self, initial_lr: float, final_lr: float, total_steps: int):
+        self.initial_lr = initial_lr
+        self.final_lr = final_lr
+        self.total_steps = total_steps
+
+    def __call__(self, step: int) -> float:
+        # Step is the current total timestep count from Learner
+        progress = min(1.0, step / self.total_steps)
+        return self.initial_lr + progress * (self.final_lr - self.initial_lr)
+
+
 # ---------------------------------------------------------------------------
 # Hardware auto-detection
 # ---------------------------------------------------------------------------
@@ -168,8 +181,9 @@ def train_phase_1():
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
         ppo_ent_coef=0.005,
-        policy_lr=2e-5,
-        critic_lr=2e-5,
+        # Linearly decay LR from 2e-5 to 1e-6 over the next 50 million steps
+        policy_lr=LinearSchedule(2e-5, 1e-6, 50_000_000),
+        critic_lr=LinearSchedule(2e-5, 1e-6, 50_000_000),
         standardize_returns=True,
         standardize_obs=False,
     )
