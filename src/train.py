@@ -6,9 +6,24 @@ from rlgym_ppo import Learner
 
 # We must monkeypatch rlgym_ppo to use our custom architecture
 import rlgym_ppo.ppo.ppo_learner
+from rlgym_ppo.ppo.ppo_learner import PPOLearner
 from architecture import AttentionApexPolicy, AttentionApexValueEstimator
 rlgym_ppo.ppo.ppo_learner.ContinuousPolicy = AttentionApexPolicy
 rlgym_ppo.ppo.ppo_learner.ValueEstimator = AttentionApexValueEstimator
+
+# Monkeypatch: override log_std after checkpoint load for fine-tuning
+_original_load_from = PPOLearner.load_from
+
+def _load_from_with_log_std_override(self, folder_path):
+    _original_load_from(self, folder_path)
+    if hasattr(self.policy, 'log_std'):
+        target_log_std = -1.0
+        with torch.no_grad():
+            self.policy.log_std.fill_(target_log_std)
+        print(f"[OVERRIDE] log_std set to {target_log_std} "
+              f"(std={torch.exp(self.policy.log_std[0]).item():.4f})")
+
+PPOLearner.load_from = _load_from_with_log_std_override
 
 
 class LinearSchedule:
