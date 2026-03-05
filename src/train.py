@@ -195,9 +195,9 @@ def train_phase_1():
         log_to_wandb=False,
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
-        ppo_ent_coef=0.0005,
-        policy_lr=1e-6,
-        critic_lr=1e-6,
+        ppo_ent_coef=0.0001,
+        policy_lr=1e-7,
+        critic_lr=1e-7,
         standardize_returns=True,
         standardize_obs=False,
     )
