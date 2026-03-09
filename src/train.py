@@ -2,6 +2,8 @@ import os
 import psutil
 import torch
 import rlgym_sim
+import numpy as np
+from rlgym_sim.utils.state_setters import StateSetter, StateWrapper
 from rlgym_ppo import Learner
 
 # We must monkeypatch rlgym_ppo to use our custom architecture
@@ -17,7 +19,7 @@ _original_load_from = PPOLearner.load_from
 def _load_from_with_log_std_override(self, folder_path):
     _original_load_from(self, folder_path)
     if hasattr(self.policy, 'log_std'):
-        target_log_std = -1.0
+        target_log_std = -0.5
         with torch.no_grad():
             self.policy.log_std.fill_(target_log_std)
         print(f"[OVERRIDE] log_std set to {target_log_std} "
@@ -37,6 +39,37 @@ class LinearSchedule:
         # Step is the current total timestep count from Learner
         progress = min(1.0, step / self.total_steps)
         return self.initial_lr + progress * (self.final_lr - self.initial_lr)
+
+class DirectKickoffDrill(StateSetter):
+    def reset(self, state_wrapper: StateWrapper):
+        # 1. Reset ball to center
+        state_wrapper.ball.set_pos(x=0, y=0, z=93)
+        state_wrapper.ball.set_lin_vel(0, 0, 0)
+        state_wrapper.ball.set_ang_vel(0, 0, 0)
+
+        for car in state_wrapper.cars:
+            # 2. Pick one of the 3 problematic spawns
+            spawn_type = np.random.randint(0, 3)
+            if spawn_type == 0:
+                x_pos, y_pos = 0, -4608      # Dead center
+            elif spawn_type == 1:
+                x_pos, y_pos = -256, -2816   # Off-center left
+            else:
+                x_pos, y_pos = 256, -2816    # Off-center right
+                
+            # 3. Add Domain Randomization (Noise)
+            x_pos += np.random.uniform(-40, 40)
+            y_pos += np.random.uniform(-40, 40)
+            
+            # Point car exactly at the ball, with slight rotational noise
+            yaw = np.arctan2(0 - y_pos, 0 - x_pos) + np.random.uniform(-0.05, 0.05)
+            
+            # Apply state
+            car.set_pos(x=x_pos, y=y_pos, z=17)
+            car.set_rot(pitch=0, yaw=yaw, roll=0)
+            car.set_lin_vel(0, 0, 0)
+            car.set_ang_vel(0, 0, 0)
+            car.boost = 0.33
 
 
 # ---------------------------------------------------------------------------
@@ -151,25 +184,25 @@ def build_env():
     from rlgym_sim.utils.reward_functions.common_rewards import EventReward
     from rlgym_sim.utils.reward_functions import CombinedReward
     from rlgym_sim.utils.terminal_conditions.common_conditions import (
-        TimeoutCondition, GoalScoredCondition
+        TimeoutCondition, GoalScoredCondition, NoTouchTimeoutCondition
     )
     from rlgym_sim.utils.action_parsers import ContinuousAction
     from obs import ZeroPaddedObs
-    from rewards import build_phase_1_reward
-
-    reward_fn = CombinedReward.from_zipped(
-        (build_phase_1_reward(), 1.0),
-        (EventReward(goal=100.0, concede=-100.0), 1.0)
-    )
+    from rewards import build_phase_3_reward
 
     env = rlgym_sim.make(
         tick_skip=8,
         team_size=1,
         spawn_opponents=False,  # Phase 1: 1v0
-        terminal_conditions=[TimeoutCondition(300), GoalScoredCondition()],
-        reward_fn=reward_fn,
+        terminal_conditions=[
+            TimeoutCondition(100), 
+            NoTouchTimeoutCondition(40),
+            GoalScoredCondition()
+        ],
+        reward_fn=build_phase_3_reward(),
         obs_builder=ZeroPaddedObs(),
-        action_parser=ContinuousAction()
+        action_parser=ContinuousAction(),
+        state_setter=DirectKickoffDrill()
     )
     return env
 
@@ -196,8 +229,8 @@ def train_phase_1():
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
         ppo_ent_coef=0.0001,
-        policy_lr=1e-7,
-        critic_lr=1e-7,
+        policy_lr=2e-6,
+        critic_lr=2e-6,
         standardize_returns=True,
         standardize_obs=False,
     )

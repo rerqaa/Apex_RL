@@ -48,3 +48,15 @@ class Phase2Reward(RewardFunction):
             reward += 1.0 if player.team_num == 1 else -1.0
             
         return reward
+
+def build_phase_3_reward():
+    """Sparse reward for final kickoff fine-tuning. Kills crossbar farming."""
+    to_ball = VelocityPlayerToBallReward()
+    
+    # 99.9% of the reward is the goal. 
+    # A microscopic to_ball reward exists just to prevent the bot from sitting still.
+    reward_fn = CombinedReward.from_zipped(
+        (to_ball, 0.001), 
+        (EventReward(goal=100.0, concede=-100.0), 1.0)
+    )
+    return reward_fn
