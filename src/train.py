@@ -19,7 +19,7 @@ _original_load_from = PPOLearner.load_from
 def _load_from_with_log_std_override(self, folder_path):
     _original_load_from(self, folder_path)
     if hasattr(self.policy, 'log_std'):
-        target_log_std = -0.5
+        target_log_std = -1.5
         with torch.no_grad():
             self.policy.log_std.fill_(target_log_std)
         print(f"[OVERRIDE] log_std set to {target_log_std} "
@@ -229,8 +229,8 @@ def train_phase_1():
         checkpoints_save_folder="checkpoints/",
         save_every_ts=500_000,
         ppo_ent_coef=0.0001,
-        policy_lr=2e-6,
-        critic_lr=2e-6,
+        policy_lr=1e-6,
+        critic_lr=1e-6,
         standardize_returns=True,
         standardize_obs=False,
     )
